@@ -128,8 +128,7 @@ ls ~/.claude/skills/codex-bridge/
 - **macOS only**：靠 `pgrep` + `open -a` + Codex.app 的本地路径。Linux/Windows 适配需要改 `bridge.py` 的进程检测和启动逻辑。
 - **Codex.app 必须先登录**：Skill 借用你已有的 ChatGPT/Codex 账号，token 用量计入你的账号。
 - **依赖 Codex.app 的 DOM 结构**：Codex 大版本更新可能让选择器失效。如果断了，先去翻 [`references/selectors.md`](references/selectors.md) 比对当前页面 DOM。
-- **中文 ARIA label**：当前 selector 写死了中文（如 `归档对话`、`是`），系统语言切英文时需要相应改 `bridge.py`。欢迎 PR 适配多语言。
-- **Workspace 必须先在 Codex.app 里手动创建**——这个 Skill 不会自动建项目。
+- **中文 ARIA label**：当前 selector 写死了中文（如 `归档对话`、`是`、`保存`、`项目名称`、`使用现有文件夹`），系统语言切英文时需要相应改 `bridge.py`。欢迎 PR 适配多语言。
 - **archive 偶尔被沙盒限制**：如果你的 Claude Code 配置里限制了某些点击，archive 可能要手动做。
 
 ---
