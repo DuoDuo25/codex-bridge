@@ -197,6 +197,199 @@ def cmd_list_workspaces(args):
     print(json.dumps(_eval_json(js), ensure_ascii=False))
 
 
+# Reusable JS snippet: full pointer-event sequence Radix Dropdown listens for.
+# Plain .click() does NOT open Radix-built dropdowns/submenus — they listen on
+# pointerdown / pointerup and treat the missing pointer events as "not really
+# a click". So every menu interaction has to dispatch the whole sequence.
+#
+# This snippet goes INSIDE each IIFE body (not at script top level) because
+# agent-browser's `Runtime.evaluate` treats the whole expression as a single
+# expression — a `const` statement at top level followed by an IIFE breaks it.
+_FIRE_HELPER = """
+const _fire = (el) => {
+  const r = el.getBoundingClientRect();
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const o = {bubbles:true,cancelable:true,view:window,button:0,clientX:cx,clientY:cy,pointerType:'mouse',isPrimary:true};
+  el.dispatchEvent(new PointerEvent('pointerenter', o));
+  el.dispatchEvent(new MouseEvent('mouseenter', o));
+  el.dispatchEvent(new PointerEvent('pointermove', o));
+  el.dispatchEvent(new PointerEvent('pointerdown', o));
+  el.dispatchEvent(new MouseEvent('mousedown', o));
+  el.dispatchEvent(new PointerEvent('pointerup', o));
+  el.dispatchEvent(new MouseEvent('mouseup', o));
+  el.dispatchEvent(new MouseEvent('click', o));
+};
+"""
+
+
+def cmd_new_workspace(args):
+    """Create a new project (workspace) in Codex.app.
+
+    Modes:
+      --name X            create a BLANK project labelled X
+      --folder /abs/path  create a project bound to an existing folder
+
+    Why each step is the way it is:
+
+    - The composer-bottom picker is a Radix DropdownMenu. Plain `.click()` does
+      NOT open it — Radix listens on pointerdown / pointerup, not the synthetic
+      `click` event you get from `HTMLElement.click()`. We have to dispatch the
+      full pointer sequence (see `_DISPATCH_CLICK`).
+
+    - The picker button has no aria-label and its text equals the *current*
+      workspace name (locale-dependent, user-dependent). The locale-independent
+      way to find it: a button with `aria-haspopup=menu`, `data-state` attr
+      (closed/open), exactly TWO SVGs (folder icon + chevron-down), and
+      non-empty text. No other Codex.app control matches all four.
+
+    - "添加新项目" is the only menuitem in the picker dropdown with
+      `aria-haspopup=menu` — that's how we find it without depending on the
+      Chinese label.
+
+    - Sub-menu items "新建空白项目" / "使用现有文件夹" are matched by text since
+      they have no aria-label, no role distinction, no data-attr. If you
+      ship Codex.app in another locale you'd need to translate these strings.
+
+    - "使用现有文件夹" path opens a NATIVE macOS NSOpenPanel that lives outside
+      the WebView; CDP can't see it. We drive it with osascript / AppleScript:
+        Cmd+Shift+G → opens the "Go to folder" sheet
+        type the absolute path
+        Return → sheet closes, panel navigates into the folder
+        Return → clicks the default "Open" button which selects the current
+                 directory (NSOpenPanel in directory-selection mode)
+      This requires the calling terminal app to have Accessibility permission
+      in System Settings → Privacy & Security → Accessibility. If you see
+      `osascript is not allowed assistive access`, that's what to grant.
+    """
+    if bool(args.name) == bool(args.folder):
+        sys.exit("Pass exactly one of --name <label> (blank project) or --folder <abs_path> (existing folder).")
+
+    # 1. Open the workspace picker dropdown.
+    open_picker_js = f"""(() => {{
+      {_FIRE_HELPER}
+      const btns = [...document.querySelectorAll('button[aria-haspopup=menu][data-state]')]
+        .filter(b => b.offsetParent && b.querySelectorAll('svg').length === 2 && (b.innerText||'').trim().length > 0);
+      if (!btns.length) return {{ok:false, err:'workspace picker not found'}};
+      _fire(btns[0]);
+      return {{ok:true, currentLabel:(btns[0].innerText||'').trim()}};
+    }})()"""
+    res = _eval_json(open_picker_js)
+    if not res or not res.get("ok"):
+        sys.exit(f"open picker: {res}")
+    time.sleep(0.4)
+
+    # 2. Click "添加新项目" — the only menuitem with aria-haspopup=menu in this dropdown.
+    open_add_js = f"""(() => {{
+      {_FIRE_HELPER}
+      const it = [...document.querySelectorAll('[role=menuitem][aria-haspopup=menu]')]
+        .find(el => el.offsetParent);
+      if (!it) return {{ok:false, err:'add-new-project menuitem not found'}};
+      _fire(it);
+      return {{ok:true}};
+    }})()"""
+    res = _eval_json(open_add_js)
+    if not res or not res.get("ok"):
+        sys.exit(f"add: {res}")
+    time.sleep(0.5)
+
+    # 3. Click the submenu item — by visible text (no aria distinction available).
+    target_label = "新建空白项目" if args.name else "使用现有文件夹"
+    click_target_js = f"""(() => {{
+      {_FIRE_HELPER}
+      const t = [...document.querySelectorAll('[role=menuitem]')]
+        .find(el => el.offsetParent && (el.innerText||'').trim() === {json.dumps(target_label)});
+      if (!t) return {{ok:false, err:'submenu item not found', label:{json.dumps(target_label)}}};
+      _fire(t);
+      return {{ok:true}};
+    }})()"""
+    res = _eval_json(click_target_js)
+    if not res or not res.get("ok"):
+        sys.exit(f"click {target_label}: {res}")
+
+    # 4. Mode-specific completion.
+    if args.name:
+        # Blank: a dialog with input[aria-label="项目名称"] + 保存 button appears in-WebView.
+        # The input pre-fills with a default ("New project"). We set the value via
+        # React's native setter + an 'input' event so React's controlled-component
+        # state updates correctly — typing onto the pre-filled default would otherwise
+        # produce labels like "New projectFOO" and Cmd+A keyboard select-all has been
+        # observed to close the dialog rather than select the text.
+        time.sleep(0.6)
+        set_value_js = f"""(() => {{
+          const inp = document.querySelector('input[aria-label="项目名称"]');
+          if (!inp) return {{ok:false, err:'input not found'}};
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          setter.call(inp, {json.dumps(args.name)});
+          inp.dispatchEvent(new Event('input', {{bubbles:true}}));
+          inp.dispatchEvent(new Event('change', {{bubbles:true}}));
+          inp.focus();
+          return {{ok:true, value:inp.value}};
+        }})()"""
+        res = _eval_json(set_value_js)
+        if not res or not res.get("ok"):
+            sys.exit(f"set name: {res}")
+        time.sleep(0.3)
+        save_js = f"""(() => {{
+          {_FIRE_HELPER}
+          const btn = [...document.querySelectorAll('button')]
+            .find(b => b.offsetParent && (b.innerText||'').trim() === '保存' && !b.disabled);
+          if (!btn) return {{ok:false, err:'save button missing or disabled'}};
+          _fire(btn);
+          return {{ok:true}};
+        }})()"""
+        res = _eval_json(save_js)
+        if not res or not res.get("ok"):
+            sys.exit(f"save: {res}")
+        result_label = args.name
+        mode = "blank"
+    else:
+        # Existing folder: native NSOpenPanel — drive via osascript.
+        folder = os.path.abspath(os.path.expanduser(args.folder))
+        if not os.path.isdir(folder):
+            sys.exit(f"folder does not exist: {folder}")
+        time.sleep(1.0)  # Native dialog takes a beat to open.
+        # AppleScript quoting: backslashes and double-quotes inside the path need escaping.
+        ap_path = folder.replace("\\", "\\\\").replace('"', '\\"')
+        applescript = (
+            'tell application "System Events"\n'
+            '    tell application process "Codex" to set frontmost to true\n'
+            '    delay 0.2\n'
+            '    keystroke "g" using {command down, shift down}\n'
+            '    delay 0.5\n'
+            f'    keystroke "{ap_path}"\n'
+            '    delay 0.3\n'
+            '    key code 36\n'  # Return: closes Go-to-folder sheet, panel navigates into the folder
+            '    delay 0.7\n'
+            '    key code 36\n'  # Return: clicks default "Open" button → selects current dir
+            'end tell\n'
+        )
+        result = subprocess.run(["osascript", "-e", applescript], capture_output=True, text=True)
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            hint = ""
+            if "not allowed" in stderr or "1728" in stderr or "25211" in stderr:
+                hint = ("\n\nFix: System Settings → Privacy & Security → Accessibility → "
+                        "enable for your terminal app (Terminal.app / iTerm / etc.) and re-run.")
+            sys.exit(f"osascript failed: {stderr}{hint}")
+        result_label = os.path.basename(folder.rstrip("/"))
+        mode = "folder"
+
+    # 5. Wait until the new workspace appears in the sidebar (best-effort, 6s budget).
+    appeared = False
+    for _ in range(12):
+        time.sleep(0.5)
+        names_js = """(() => [...document.querySelectorAll('[aria-label^="在 "][aria-label$=" 中开始新对话"]')]
+          .map(b => b.getAttribute('aria-label').replace(/^在 /, '').replace(/ 中开始新对话$/, '')))()"""
+        names = _eval_json(names_js) or []
+        if any(result_label in n for n in names):
+            appeared = True
+            break
+
+    if args.json:
+        print(json.dumps({"created": True, "mode": mode, "label": result_label,
+                          "appearedInSidebar": appeared}, ensure_ascii=False))
+
+
 def _resolve_prompt(args):
     """Pick prompt body from --prompt or --prompt-file. Errors if neither.
 
@@ -463,6 +656,17 @@ def main():
 
     sub.add_parser("attach").set_defaults(func=cmd_attach)
     sub.add_parser("list-workspaces").set_defaults(func=cmd_list_workspaces)
+
+    pnw = sub.add_parser("new-workspace",
+        help="create a new Codex project (workspace). Pass --name X for a blank project, "
+             "or --folder /abs/path to bind it to an existing folder.")
+    pnw.add_argument("--name", help="label for a NEW BLANK project")
+    pnw.add_argument("--folder", help="absolute path to an existing folder; "
+                     "the new project will be bound to it. Requires "
+                     "Accessibility permission for the calling terminal app "
+                     "(System Settings → Privacy & Security → Accessibility).")
+    pnw.add_argument("--json", action="store_true")
+    pnw.set_defaults(func=cmd_new_workspace)
 
     pn = sub.add_parser("new", help="start new thread in workspace + send prompt")
     pn.add_argument("--workspace", required=True)

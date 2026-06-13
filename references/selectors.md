@@ -83,6 +83,60 @@ against this build; revisit if the UI is restyled.
   [aria-label="对话操作"]
   ```
 
+## Workspace picker (composer-bottom dropdown)
+
+- The button at the bottom of the composer showing the current workspace name:
+  ```
+  button[aria-haspopup=menu][data-state]
+  // ...with TWO svgs (folder icon + chevron-down) and non-empty innerText
+  ```
+  Picking the button by its name is locale- and user-dependent. The
+  `aria-haspopup=menu + data-state + 2 svgs + non-empty text` combo is the
+  most stable structural match Codex.app exposes today.
+
+- Dropdown items: standard Radix DropdownMenu — `[role=menuitem]`.
+
+- "添加新项目" is the only menuitem in this dropdown with `aria-haspopup=menu`
+  (it opens a submenu). Match it by that attribute, NOT by text, for locale
+  independence.
+
+- Submenu items "新建空白项目" / "使用现有文件夹" have no aria-label or unique
+  role — match them by visible text. If you ship Codex.app in another locale
+  you'll need to translate these.
+
+- Naming-dialog input (blank-project mode): `input[aria-label="项目名称"]`.
+  Pre-fills with a default ("New project"). Set the value via React's native
+  setter + an `input` event — naive `inserttext` concatenates onto the default,
+  and `Cmd+A` keyboard select-all has been observed to close the dialog
+  rather than select the text.
+
+- Existing-folder mode opens a NATIVE macOS NSOpenPanel that lives outside the
+  WebView. Drive with osascript:
+  ```
+  keystroke "g" using {command down, shift down}   -- Go to folder
+  keystroke "<absolute path>"
+  key code 36                                       -- Return: navigates panel
+  key code 36                                       -- Return: clicks default Open
+  ```
+  Requires Accessibility permission for the calling terminal.
+
+## Radix interaction caveat
+
+**`HTMLElement.click()` does NOT open Radix dropdowns / submenus.** Radix
+listens on `pointerdown` / `pointerup` and treats the synthetic `click` event
+as not-really-a-click. Every dropdown trigger needs the full pointer-event
+sequence:
+```js
+const o = {bubbles:true,cancelable:true,view:window,button:0,clientX:cx,clientY:cy,pointerType:'mouse',isPrimary:true};
+el.dispatchEvent(new PointerEvent('pointerenter', o));
+el.dispatchEvent(new PointerEvent('pointermove', o));
+el.dispatchEvent(new PointerEvent('pointerdown', o));
+el.dispatchEvent(new MouseEvent('mousedown', o));
+el.dispatchEvent(new PointerEvent('pointerup', o));
+el.dispatchEvent(new MouseEvent('mouseup', o));
+el.dispatchEvent(new MouseEvent('click', o));
+```
+
 ## Stable techniques
 
 - Prefer `[aria-label="..."]` matches over class-based selectors. ARIA labels
@@ -91,6 +145,8 @@ against this build; revisit if the UI is restyled.
   up to ~5 levels and check `innerText.includes(...)`. See `cmd_archive` for the
   pattern.
 - Class-name substring with `[class*="..." i]` survives CSS-module hashing.
+- For Radix elements, `data-state="open"/"closed"` is a stable popover-state
+  signal that's locale-independent.
 
 ## Things to NOT click without confirmation
 

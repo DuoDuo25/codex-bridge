@@ -58,6 +58,8 @@ If Codex.app isn't running with the debug port, this will quit-and-relaunch it
 |---|---|
 | `attach` | Ensure Codex.app is up + CDP connected |
 | `list-workspaces` | Print sidebar workspace names as JSON array |
+| `new-workspace --name "<label>"` | Create a NEW BLANK project labelled `<label>` |
+| `new-workspace --folder /abs/path` | Create a project bound to an existing folder. Requires Accessibility permission for the calling terminal (System Settings → Privacy & Security → Accessibility) — the native NSOpenPanel is outside the WebView and is driven via osascript keystrokes |
 | `new --workspace <ws> --prompt-file <f>` | Start fresh thread, send prompt from file |
 | `send --prompt-file <f>` | Follow-up in the currently-open thread |
 | `wait [--timeout 600] [--auto-approve]` | Block until turn settles. `--auto-approve` clicks "是" on Codex command-approval dialogs (e.g. `git add`). |

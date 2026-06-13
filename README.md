@@ -88,6 +88,8 @@ ls ~/.claude/skills/codex-bridge/
 |---|---|
 | `attach` | 确保 Codex.app 起来 + CDP 已连接 |
 | `list-workspaces` | 列出左侧栏所有 workspace 名（JSON） |
+| `new-workspace --name "<label>"` | **新增**：创建一个空白项目 |
+| `new-workspace --folder /abs/path` | **新增**：把项目绑定到一个已有文件夹（需要辅助功能权限，见下方） |
 | `new --workspace <ws> --prompt-file <f>` | 开新对话并发送 prompt |
 | `send --prompt-file <f>` | 在当前对话里发追加消息 |
 | `wait [--timeout 600] [--auto-approve]` | 阻塞等当前 turn 结束 |
@@ -95,6 +97,8 @@ ls ~/.claude/skills/codex-bridge/
 | `archive` | 归档当前活动对话（带确认） |
 | `open-thread --title "<substring>"` | 按标题子串切到历史对话 |
 | `review --workspace <ws>` | 在指定 workspace 开一条独立的 review 线程 |
+
+> **`new-workspace --folder` 需要辅助功能权限**：因为 Codex.app 选文件夹的对话框是 macOS 原生 NSOpenPanel，CDP 看不到，得用 `osascript` 模拟键盘（Cmd+Shift+G 贴路径 + Enter）。第一次用之前去：**系统设置 → 隐私与安全性 → 辅助功能**，把你跑命令的终端 app（Terminal / iTerm / 等）勾上。如果忘了，会看到一行 `osascript is not allowed assistive access` 报错。
 
 任何命令都可加 `--json` 拿结构化输出。`new` 和 `send` 强烈建议用 `--prompt-file`——shell 转义会毁掉带引号 / `$` / 反引号的长 prompt。
 
